@@ -16,7 +16,7 @@ h1{margin:0;font:italic 800 clamp(2.4rem,7vw,4.6rem)/1 "Barlow Condensed",Impact
 .meta{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:12px 0 22px;color:#c9c7ee;font-size:1.05rem}
 .tag{background:var(--red);color:#fff;font:italic 700 1.1rem "Barlow Condensed",sans-serif;padding:3px 18px 3px 12px;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%)}
 .tag:empty{display:none}
-main{max-width:1100px;margin:-38px auto 0;padding:0 clamp(16px,4vw,40px) 60px;position:relative}
+main{max-width:1100px;margin:8px auto 0;padding:0 clamp(16px,4vw,40px) 60px;position:relative}
 .pick{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:16px;align-items:flex-end}
 label{display:flex;flex-direction:column;gap:4px;font-size:.9rem;color:var(--mute)}
 select{font:inherit;color:var(--ink);padding:8px 10px;min-width:170px;border:1px solid var(--line);background:var(--panel);border-radius:6px}
@@ -96,6 +96,13 @@ svg.has .ms{opacity:.3}svg.has .ms.sel{opacity:1}
 .sec{font:italic 700 1.5rem "Barlow Condensed",sans-serif;margin:28px 0 10px}
 #view>.sec:first-child{margin-top:4px}
 @media(max-width:900px){.app{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px}.brand{display:none}.nav{flex-direction:row;overflow-x:auto}.nav button{white-space:nowrap;border-left:0;border-bottom:3px solid transparent;border-radius:8px 8px 0 0}.nav button[aria-selected=true]{border-bottom-color:var(--red)}}
+.radio{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 14px;margin-bottom:8px}
+.radio audio{flex:1;min-width:220px;height:36px}
+.rp{margin:10px 0 0;color:var(--mute)}.rp .drv{color:var(--ink)}
+.mapbar input[type=range]{flex:1;min-width:150px;accent-color:var(--red)}
+#rate{min-width:0}
+tr[data-x]{cursor:pointer}
+#sload{padding:9px 16px;font-weight:600}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -132,16 +139,32 @@ const fmtLap=s=>{if(s==null)return'–';const m=Math.floor(s/60);return m+':'+(s
 const fmtSec=s=>s==null?'–':s.toFixed(3);
 const ranked=()=>S.stats.filter(s=>s.best).sort((a,b)=>a.best.lap_duration-b.best.lap_duration);
 
-async function api(path){
-  for(let i=0;i<4;i++){
+const memo=new Map(),stamps=[];let chain=Promise.resolve();
+function api(path,mode){
+  if(!mode&&memo.has(path))return Promise.resolve(memo.get(path));
+  const run=chain.then(()=>fetchOne(path,mode));
+  chain=run.catch(()=>{});
+  return run;
+}
+async function fetchOne(path,mode){
+  if(!mode&&memo.has(path))return memo.get(path);
+  for(let i=0;i<5;i++){
+    for(;;){
+      const now=Date.now();while(stamps.length&&now-stamps[0]>61000)stamps.shift();
+      const last=stamps.length?stamps[stamps.length-1]:0,wait=Math.max(stamps.length>=26?stamps[0]+61000-now:0,now-last<400?400-(now-last):0);
+      if(wait<=0)break;
+      if(wait>3000)say(`Pausing ${Math.ceil(wait/1000)} s to stay inside OpenF1's free limit of about 30 requests a minute…`);
+      await sleep(wait);
+    }
+    stamps.push(Date.now());
     let r;
     try{r=await fetch(API+path,tk()?{headers:{Authorization:'Bearer '+tk()}}:undefined)}catch{throw new Error('Could not reach OpenF1. Check your internet connection and try again.')}
     if(r.status===404)return[];
-    if(r.status===429){await sleep(700*(i+1));continue}
+    if(r.status===429){say('OpenF1 asked us to slow down. Waiting a few seconds…');await sleep(5000*(i+1));continue}
     if(!r.ok)throw new Error('OpenF1 answered with status '+r.status+'.');
-    return r.json();
+    const j=await r.json();if(mode!==2)memo.set(path,j);return j;
   }
-  throw new Error('OpenF1 is limiting requests right now. Wait a few seconds and try again.');
+  throw new Error('OpenF1 is still limiting requests. Wait a minute and try again.');
 }
 function fill(id,rows){const s=$(id);s.innerHTML='';rows.forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;s.appendChild(o)})}
 
@@ -192,7 +215,7 @@ function compute(drivers,laps){
   S.gb={s1:min(S.stats,s=>s.s1),s2:min(S.stats,s=>s.s2),s3:min(S.stats,s=>s.s3)};
 }
 
-const table=(heads,rows)=>`<div class="wrap"><table><thead><tr>${heads.map(h=>`<th class="${h==='Driver'?'l':''}">${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+const table=(heads,rows)=>`<div class="wrap"><table><thead><tr>${heads.map(h=>`<th class="${['Driver','Team','Track'].includes(h)?'l':''}">${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 const drv=s=>`<td class="l"><span class="drv"><i style="background:${s.col}"></i>${esc(s.code)}</span><small>${esc(s.team)}</small></td>`;
 const cell=(v,best,own)=>`<td><span class="pill ${v!=null&&v===best?'p':v!=null&&v===own?'g':''}">${fmtSec(v)}</span></td>`;
 const empty=()=>`<p class="empty">No data to show for this session yet. Pick another session, or come back once it has finished.</p>`;
@@ -354,7 +377,7 @@ async function locOf(s){
 function prep(s,loc,car){
   const t0=new Date(s.best.date_start);let d=0,j=0;
   const P=loc.map((p,i,a)=>{if(i)d+=Math.hypot(p.x-a[i-1].x,p.y-a[i-1].y);return{x:p.x,y:-p.y,t:(new Date(p.date)-t0)/1000,d}});
-  P.forEach(p=>{p.f=p.d/(d||1);while(j<car.length-1&&Math.abs(car[j+1].t-p.t)<Math.abs(car[j].t-p.t))j++;const c=car[j]||{};p.speed=c.speed;p.throttle=c.throttle;p.n_gear=c.n_gear});
+  P.forEach(p=>{p.f=p.d/(d||1);while(j<car.length-1&&Math.abs(car[j+1].t-p.t)<Math.abs(car[j].t-p.t))j++;const c=car[j]||{};p.speed=c.speed;p.throttle=c.throttle;p.n_gear=c.n_gear;p.brake=c.brake});
   return{s,P,T:s.best.lap_duration};
 }
 function tTrack(){
@@ -401,13 +424,13 @@ function drawTrack(D){
   const mark=(t,l)=>{const p=P.reduce((a,c)=>Math.abs(c.t-t)<Math.abs(a.t-t)?c:a);return `<circle cx="${p.x}" cy="${p.y}" r="${pad*.3}" fill="#10112b" stroke="#fff" stroke-width="${pad*.1}"/><text x="${p.x+pad*.45}" y="${p.y-pad*.45}" font-size="${pad*.7}" font-weight="700" fill="#fff">${l}</text>`};
   const b=A.s.best,unit={speed:'km/h',throttle:'%',n_gear:'gear'}[mode];
   const legend=mode==='mini'?[[A,cA],[B,cB]].map(([d,c])=>`<span class="cmp" style="background:${c};color:#10112a">${esc(d.s.code)} faster</span>`).join(''):`<div class="grad"><span>${Math.round(lo)} ${unit}</span><i></i><span>${Math.round(hi)} ${unit}</span></div>`;
-  $('tm').innerHTML=`<svg id="sv" viewBox="${X} ${Y} ${W} ${H}" role="img" aria-label="Track map"><polyline points="${P.map(p=>p.x+','+p.y).join(' ')}" fill="none" stroke="#262a55" stroke-width="${pad*.8}" stroke-linecap="round" stroke-linejoin="round"/><g fill="none" stroke-width="${pad*.45}" stroke-linecap="${mode==='mini'?'butt':'round'}" stroke-linejoin="round">${body}</g>${mark(0,'Start')}${b.duration_sector_1?mark(b.duration_sector_1,'S2'):''}${b.duration_sector_1&&b.duration_sector_2?mark(b.duration_sector_1+b.duration_sector_2,'S3'):''}</svg><div class="mapbar"><div class="legend">${legend}</div><button class="btn" id="rz">Reset zoom</button></div>`;
+  $('tm').innerHTML=`<svg id="sv" viewBox="${X} ${Y} ${W} ${H}" role="img" aria-label="Track map"><polyline points="${P.map(p=>p.x+','+p.y).join(' ')}" fill="none" stroke="#262a55" stroke-width="${pad*.8}" stroke-linecap="round" stroke-linejoin="round"/><g fill="none" stroke-width="${pad*.45}" stroke-linecap="${mode==='mini'?'butt':'round'}" stroke-linejoin="round">${body}</g>${mark(0,'Start')}${b.duration_sector_1?mark(b.duration_sector_1,'S2'):''}${b.duration_sector_1&&b.duration_sector_2?mark(b.duration_sector_1+b.duration_sector_2,'S3'):''}<g id="dots"></g></svg><div class="mapbar"><div class="legend">${legend}</div><button class="btn" id="rz">Reset zoom</button></div><div class="mapbar"><button class="btn" id="pp">Play</button><input type="range" id="rg" min="0" max="100" step="0.05" value="0" aria-label="Position in lap"><span id="tl">0.0 s</span><select id="rate" aria-label="Replay speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select></div><p class="rp" id="rp"></p>`;
   const svg=$('sv');let vb=[X,Y,W,H],d0=null;const set=()=>svg.setAttribute('viewBox',vb.join(' '));
   svg.onwheel=e=>{e.preventDefault();const r=svg.getBoundingClientRect(),f=e.deltaY<0?.8:1.25,px=vb[0]+(e.clientX-r.left)/r.width*vb[2],py=vb[1]+(e.clientY-r.top)/r.height*vb[3];vb=[px-(px-vb[0])*f,py-(py-vb[1])*f,vb[2]*f,vb[3]*f];set()};
   svg.onpointerdown=e=>{d0={x:e.clientX,y:e.clientY,v:[...vb]}};
   svg.onpointermove=e=>{if(!d0)return;const r=svg.getBoundingClientRect();vb[0]=d0.v[0]-(e.clientX-d0.x)/r.width*vb[2];vb[1]=d0.v[1]-(e.clientY-d0.y)/r.height*vb[3];set()};
   svg.onpointerup=svg.onpointerleave=()=>{d0=null};
-  $('rz').onclick=()=>{vb=[X,Y,W,H];set()};
+  $('rz').onclick=()=>{vb=[X,Y,W,H];set()};S.zoomTo=(x,y,s)=>{vb=[x-W*s/2,y-H*s/2,W*s,H*s];set()};replay(D,pad,cA,cB);
   $('ro').innerHTML=`<p>${mode==='mini'?'Hover or tap a mini-sector to compare the two laps there.':'Hover the track to see the value at each point.'}</p>`;
   if(S.cb==='mini'&&!B)$('tsum').textContent='Choose a driver under Compare with to see who is quicker in each mini-sector. Showing speed for now.';
   const stat=(d,i)=>{const a=d.P.filter(p=>p.f>=i/N&&p.f<(i+1)/N&&p.speed!=null).map(p=>p.speed);return a.length?`avg ${Math.round(a.reduce((x,y)=>x+y)/a.length)}, min ${Math.min(...a)}, max ${Math.max(...a)} km/h`:'no speed data'};
@@ -443,7 +466,7 @@ async function prepQ(first){
   const n=$('session').selectedOptions[0]?.textContent||'';
   S.isQ=/qualifying|shootout/i.test(n);S.sq=/sprint/i.test(n);
   if(first)S.seg=0;
-  S.sr=S.isQ?await api('session_result?session_key='+S.session).catch(()=>[]):[];
+  S.sr=S.isQ?await api('session_result?session_key='+S.session,!first).catch(()=>[]):[];
   S.qb=S.isQ?qBounds():[];
 }
 const recompute=()=>compute(S.drivers,S.seg&&S.qb.length?S.allLaps.filter(l=>segOf(l)===S.seg):S.allLaps);
@@ -477,14 +500,17 @@ function setLive(on){
 async function refresh(){
   const k=$('session').value;if(!k)return;
   try{
-    const [drivers,laps]=await Promise.all([api('drivers?session_key='+k),api('laps?session_key='+k)]);
+    const [drivers,laps]=await Promise.all([api('drivers?session_key='+k),api('laps?session_key='+k,1)]);
     if(k!==S.session)return;
     S.drivers=drivers;S.allLaps=laps;S.ex=null;await prepQ();recompute();
-    if(!['tele','maps','strategy'].includes(S.tab))render();
+    if(!['tele','maps','strategy','pos','rc','season'].includes(S.tab))render();
     say('Updated '+new Date().toLocaleTimeString()+'. Refreshing every 10 seconds.');
   }catch(e){say(e.message,1)}
 }
 const ICON={
+ trend:'<path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/>',
+ list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+ chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
  live:'<circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19.1 4.9a10 10 0 0 1 0 14.2M4.9 19.1a10 10 0 0 1 0-14.2"/>',
  flag:'<path d="M5 22V3M5 4h13l-2 4 2 4H5"/>',
  timer:'<circle cx="12" cy="14" r="8"/><path d="M12 14v-4M10 2h4"/>',
@@ -494,6 +520,220 @@ const ICON={
  car:'<path d="m3 13 2-5a2 2 0 0 1 2-1h10a2 2 0 0 1 2 1l2 5v5h-3v-2H6v2H3zM7 14h.01M17 14h.01"/>',
  cloud:'<path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.5A4 4 0 0 0 6.5 19z"/>'
 };
+function replay(D,pad,cA,cB){
+  const [A,B]=D,cols=[cA,cB],g=$('dots'),T=Math.max(...D.map(d=>d.T)),len=A.P[A.P.length-1].d/10;
+  const at2=(d,t)=>{const P=d.P;let i=0;while(i<P.length-2&&P[i+1].t<=t)i++;const a=P[i],b=P[i+1],k=Math.max(0,Math.min(1,(t-a.t)/((b.t-a.t)||1)));return{x:a.x+(b.x-a.x)*k,y:a.y+(b.y-a.y)*k,f:a.f+(b.f-a.f)*k,c:k<.5?a:b}};
+  g.innerHTML=D.map((d,j)=>`<circle r="${pad*.36}" fill="${cols[j]}" stroke="#fff" stroke-width="${pad*.09}"/><text font-size="${pad*.62}" font-weight="700" fill="#fff" stroke="#10112b" stroke-width="${pad*.12}" paint-order="stroke">${esc(d.s.code)}</text>`).join('');
+  const rg=$('rg'),upd=t=>{
+    const st=D.map(d=>at2(d,Math.min(t,d.T)));
+    st.forEach((s,j)=>{const c=g.children[2*j],tx=g.children[2*j+1];c.setAttribute('cx',s.x);c.setAttribute('cy',s.y);tx.setAttribute('x',s.x+pad*.5);tx.setAttribute('y',s.y-pad*.5)});
+    $('tl').textContent=t.toFixed(1)+' s';
+    $('rp').innerHTML=D.map((d,j)=>{const c=st[j].c;return `<span class="drv"><i style="background:${cols[j]}"></i>${esc(d.s.code)}</span> ${Math.round(c.speed??0)} km/h, gear ${c.n_gear??'–'}, throttle ${c.throttle??0}%, brake ${c.brake>0?'on':'off'}`}).join('<br>')
+      +(B?`<br><b>${esc((st[0].f>=st[1].f?A:B).s.code)}</b> is ahead by about ${Math.round(Math.abs(st[0].f-st[1].f)*len)} m`:'');
+  };
+  rg.max=T;rg.oninput=()=>upd(+rg.value);upd(0);
+  let last=0;
+  const tick=ts=>{const dt=last?(ts-last)/1000:0;last=ts;let v=+rg.value+dt*+$('rate').value;if(v>T)v=0;rg.value=v;upd(v);S.raf=requestAnimationFrame(tick)};
+  $('pp').onclick=()=>{if(S.raf){cancelAnimationFrame(S.raf);S.raf=0;$('pp').textContent='Play'}else{last=0;$('pp').textContent='Pause';S.raf=requestAnimationFrame(tick)}};
+  corners(D,pad);
+}
+function corners(D,pad){
+  const [A,B]=D,P=A.P,v=P.map(p=>p.speed??0),vmax=Math.max(...v),out=[];
+  for(let i=3;i<P.length-3;i++){
+    const w=v.slice(Math.max(0,i-8),i+9);
+    if(v[i]===Math.min(...w)&&v[i]<vmax*.8&&Math.max(...w)-v[i]>25&&(!out.length||P[i].f-out[out.length-1].f>.02))out.push({f:P[i].f,x:P[i].x,y:P[i].y,v:v[i]});
+  }
+  if(!out.length)return;
+  const vb=c=>{const a=B.P.filter(p=>Math.abs(p.f-c.f)<.015&&p.speed!=null).map(p=>p.speed);return a.length?Math.min(...a):null};
+  $('dots').insertAdjacentHTML('beforebegin',`<g>${out.map((c,k)=>`<circle cx="${c.x}" cy="${c.y}" r="${pad*.3}" fill="#fff" fill-opacity=".9"/><text x="${c.x}" y="${c.y}" font-size="${pad*.42}" font-weight="700" fill="#10112b" text-anchor="middle" dominant-baseline="central">${k+1}</text>`).join('')}</g>`);
+  const rows=out.map((c,k)=>{const b=B?vb(c):null;return `<tr data-x="${c.x}" data-y="${c.y}"><td>${k+1}</td><td>${c.v}</td>${B?`<td>${b??'–'}</td><td>${b!=null?(c.v-b>0?'+':'')+(c.v-b):'–'}</td>`:''}</tr>`});
+  $('tm').insertAdjacentHTML('beforeend',`<h2 class="sec" style="font-size:1.2rem">Corner speeds</h2><p class="key">Slow points on ${esc(A.s.code)}'s lap, numbered in order (not official turn numbers). Click a row to zoom the map there.</p>`+table(['Corner',A.s.code+' min km/h',...(B?[B.s.code+' min km/h','Diff']:[])],rows));
+  $('tm').onclick=e=>{const r=e.target.closest('tr[data-x]');if(r)S.zoomTo(+r.dataset.x,+r.dataset.y,.22)};
+}
+const tPos=()=>S.stats.length?'<p class="key" id="psum">Loading positions…</p><div class="card"><div class="ch" style="height:520px"><canvas id="pc"></canvas></div></div><div id="pt"></div>':empty();
+async function pPos(){
+  const tok=++S.tok;
+  try{
+    const pos=S.pos&&S.pos.k===S.session?S.pos.d:(S.pos={k:S.session,d:await api('position?session_key='+S.session)}).d;
+    if(tok!==S.tok||!$('pc'))return;
+    if(!pos.length){$('psum').textContent='OpenF1 has no position data for this session. Try a race or sprint.';return}
+    const by={};pos.forEach(r=>(by[r.driver_number]??=[]).push({t:Date.parse(r.date),p:r.position}));
+    Object.values(by).forEach(a=>a.sort((x,y)=>x.t-y.t));
+    const pa=(a,t)=>{let p=a[0].p;for(const r of a){if(r.t>t)break;p=r.p}return p};
+    const ss=S.stats.filter(s=>by[s.n]),fin=s=>by[s.n][by[s.n].length-1].p;
+    mk('pc',{type:'line',data:{datasets:ss.map(s=>{const ls=s.laps.filter(l=>l.date_start).sort((a,b)=>a.lap_number-b.lap_number);
+      return{label:s.code,borderColor:s.col,backgroundColor:s.col,borderWidth:2,pointRadius:0,clip:false,
+        data:ls.map(l=>({x:l.lap_number,y:pa(by[s.n],Date.parse(l.date_start))})).concat([{x:(ls.length?ls[ls.length-1].lap_number:0)+1,y:fin(s)}])}})},
+      options:{scales:{x:{type:'linear',title:{display:true,text:'Lap'},ticks:{precision:0}},y:{reverse:true,min:1,max:ss.length,ticks:{stepSize:1,precision:0},title:{display:true,text:'Position'}}},plugins:{legend:{position:'right',labels:{boxWidth:12}}}}});
+    $('psum').textContent='Each line is a driver, showing position at the start of every lap. Click a name in the legend to hide or show a driver.';
+    $('pt').innerHTML=table(['Driver','First recorded','Finish','Change'],[...ss].sort((a,b)=>fin(a)-fin(b)).map(s=>{const a=by[s.n][0].p,c=a-fin(s);return `<tr>${drv(s)}<td>${a}</td><td><b>${fin(s)}</b></td><td><span class="pill ${c>0?'g':''}">${c>0?'+'+c:c<0?c:'–'}</span></td></tr>`}));
+  }catch(e){if(tok===S.tok)say(e.message,1)}
+}
+const FLAG={RED:'#ff3b30',YELLOW:'#f5c400','DOUBLE YELLOW':'#f5c400',GREEN:'#19c06a',CLEAR:'#19c06a',BLUE:'#4aa3ff',CHEQUERED:'#eceefb'};
+const tRc=()=>S.stats.length?'<div id="rcx"><p class="empty">Loading race control…</p></div>':empty();
+async function pRc(){
+  const tok=++S.tok,k=S.session;
+  try{
+    if(!S.rc||S.rc.k!==k){const rc=await api('race_control?session_key='+k),tr=await api('team_radio?session_key='+k);S.rc={k,rc,tr}}
+    if(tok!==S.tok||!$('rcx'))return;
+    const {rc,tr}=S.rc;S.rdv='';
+    $('rcx').innerHTML=sec('Race control')+(rc.length?table(['Lap','Time (UTC)','Flag','Message'],rc.map(r=>`<tr><td>${r.lap_number??'–'}</td><td>${String(r.date).slice(11,19)}</td><td>${r.flag?`<span class="cmp" style="background:${FLAG[r.flag]||'transparent'};color:${FLAG[r.flag]?'#10112a':'inherit'}">${esc(r.flag)}</span>`:esc(r.category||'')}</td><td class="l" style="white-space:normal">${esc(r.message)}</td></tr>`)):'<p class="empty">No race control messages for this session.</p>')
+      +sec('Team radio')+(tr.length?`<div class="pick"><label>Driver<select id="rdv"><option value="">Everyone</option>${[...new Set(tr.map(x=>x.driver_number))].map(n=>`<option value="${n}">${esc(dv(n).code)}</option>`).join('')}</select></label></div><div id="trx"></div>`:'<p class="empty">No team radio clips for this session.</p>');
+    radio();
+  }catch(e){if(tok===S.tok)say(e.message,1)}
+}
+function radio(){
+  const el=$('trx');if(!el)return;
+  const l=S.rc.tr.filter(x=>!S.rdv||x.driver_number==S.rdv).slice(-40).reverse();
+  el.innerHTML=l.map(x=>`<div class="card radio"><span class="drv"><i style="background:${dv(x.driver_number).col}"></i>${esc(dv(x.driver_number).code)}</span><small>${String(x.date).slice(11,19)} UTC</small><audio controls preload="none" src="${esc(x.recording_url)}"></audio></div>`).join('')||'<p class="empty">No clips for this driver.</p>';
+}
+function reg(a){
+  const n=a.length,sx=a.reduce((s,p)=>s+p.x,0),sy=a.reduce((s,p)=>s+p.y,0),sxx=a.reduce((s,p)=>s+p.x*p.x,0),sxy=a.reduce((s,p)=>s+p.x*p.y,0),d=n*sxx-sx*sx;
+  if(!d)return null;const m=(n*sxy-sx*sy)/d;return{m,b:(sy-m*sx)/n};
+}
+const tDeg=()=>`<label class="chk"><input type="checkbox" id="fuel" ${S.fuel!==false?'checked':''}>Fuel correction (about 0.05 s per lap of fuel burned)</label><div class="chips" id="dchips"></div><p class="key" id="dsum">Loading tyre data…</p><div class="card"><div class="ch" style="height:340px"><canvas id="dc2"></canvas></div></div><div id="dt"></div>`;
+const DASH={SOFT:[],MEDIUM:[8,4],HARD:[2,4],INTERMEDIATE:[10,3,2,3],WET:[1,5]};
+function degPick(v){
+  if(v==='all')S.dp=null;else if(v==='none')S.dp=new Set();
+  else{const n=+v,c=new Set(S.dp||S.degAll);c.has(n)?c.delete(n):c.add(n);S.dp=c}
+  pDeg();
+}
+async function pDeg(){
+  const tok=++S.tok;
+  try{
+    const {stints}=await extras();
+    if(tok!==S.tok||!$('dc2'))return;
+    const fuel=S.fuel!==false,L=max(S.stats,s=>max(s.laps,l=>l.lap_number))||0,cap=(ranked()[0]?ranked()[0].best.lap_duration:0)*1.07,out=[];
+    stints.forEach(x=>{
+      const s=S.stats.find(q=>q.n===x.driver_number);if(!s||!x.compound||x.compound==='UNKNOWN')return;
+      const pts=s.laps.filter(l=>l.lap_number>1&&l.lap_number>=x.lap_start&&(x.lap_end==null||l.lap_number<=x.lap_end)&&l.lap_duration!=null&&!l.is_pit_out_lap&&l.lap_duration<=cap)
+        .map(l=>({x:(x.tyre_age_at_start||0)+l.lap_number-x.lap_start,y:l.lap_duration-(fuel?.05*(L-l.lap_number):0)}));
+      if(pts.length<6)return;
+      const r=reg(pts);if(!r)return;
+      const base=r.b+r.m*Math.min(...pts.map(p=>p.x));
+      out.push({s,c:x.compound,n:pts.length,m:r.m,pts:pts.map(p=>({x:p.x,y:p.y-base}))});
+    });
+    if(!out.length){$('dsum').textContent='Not enough long runs in this session to measure tyre wear. Try a race.';return}
+    S.degAll=[...new Set(out.map(o=>o.s.n))];
+    $('dchips').innerHTML='<button class="chip" data-d="all" style="--c:var(--line)">All drivers</button><button class="chip" data-d="none" style="--c:var(--line)">Clear</button>'
+      +ranked().filter(s=>S.degAll.includes(s.n)).map(s=>{const on=!S.dp||S.dp.has(s.n);return `<button class="chip ${on?'on':''}" data-d="${s.n}" style="--c:${s.col}" aria-pressed="${on}">${esc(s.code)}</button>`}).join('');
+    const sel=S.dp?out.filter(o=>S.dp.has(o.s.n)):out;
+    if(!sel.length){if(S.charts.dc2){S.charts.dc2.destroy();delete S.charts.dc2}$('dsum').textContent='Pick at least one driver above.';$('dt').innerHTML='';return}
+    const ds=[],nice=c=>c[0]+c.slice(1).toLowerCase(),sg=m=>(m>=0?'+':'')+m.toFixed(3);
+    if(!S.dp){
+      [...new Set(sel.map(o=>o.c))].forEach(c=>{
+        const all=sel.filter(o=>o.c===c).flatMap(o=>o.pts),r=reg(all),xs=all.map(p=>p.x),col=CMP[c]||'#9aa0b5';
+        ds.push({label:nice(c)+' laps',data:all,backgroundColor:col+'66',borderColor:col,pointRadius:3,showLine:false});
+        if(r)ds.push({label:`${nice(c)}: ${sg(r.m)} s per lap`,data:[Math.min(...xs),Math.max(...xs)].map(x=>({x,y:r.b+r.m*x})),borderColor:col,backgroundColor:col,borderWidth:3,pointRadius:0,showLine:true});
+      });
+    }else sel.forEach(o=>{
+      const r=reg(o.pts),xs=o.pts.map(p=>p.x);if(!r)return;
+      ds.push({label:`${o.s.code} ${nice(o.c)} laps`,data:o.pts,backgroundColor:o.s.col+'66',borderColor:o.s.col,pointRadius:3,showLine:false});
+      ds.push({label:`${o.s.code} ${nice(o.c)}: ${sg(r.m)} s per lap`,data:[Math.min(...xs),Math.max(...xs)].map(x=>({x,y:r.b+r.m*x})),borderColor:o.s.col,backgroundColor:o.s.col,borderWidth:3,pointRadius:0,showLine:true,borderDash:DASH[o.c]||[]});
+    });
+    mk('dc2',{type:'scatter',data:{datasets:ds},options:{scales:{x:{type:'linear',title:{display:true,text:'Tyre age (laps)'},ticks:{precision:0}},y:{title:{display:true,text:'Time lost against the first lap of the stint (s)'}}},plugins:{legend:{labels:{filter:i=>!/ laps$/.test(i.text)}}}}});
+    $('dsum').textContent=(fuel?'Fuel-corrected. ':'Raw lap times, so fuel burn hides some of the wear. ')+(S.dp?'Each line is one stint, in the driver\'s team colour. The line style shows the tyre: solid soft, dashed medium, dotted hard. ':'All drivers are pooled by tyre. Pick drivers above to see their stints one by one. ')+'A negative slope means the track improved faster than the tyres wore.';
+    $('dt').innerHTML=table(['Driver','Tyre','Clean laps','Wear (s per lap)'],[...sel].sort((a,b)=>a.m-b.m).map(o=>`<tr>${drv(o.s)}<td><span class="cmp" style="${cmpCss(o.c)}">${esc(o.c)}</span></td><td>${o.n}</td><td><b>${sg(o.m)}</b></td></tr>`));
+  }catch(e){if(tok===S.tok)say(e.message,1)}
+}
+const SK=y=>'f1s:'+y;
+const sget=y=>{try{const d=JSON.parse(localStorage.getItem(SK(y)));return d&&d.k===y?d:null}catch{return null}};
+const sput=d=>{try{localStorage.setItem(SK(d.k),JSON.stringify(d))}catch{}};
+const medOf=a=>{const s=[...a].sort((p,q)=>p-q),i=s.length>>1;return s.length%2?s[i]:(s[i-1]+s[i])/2};
+async function loadSeason(){
+  const y=$('year').value;
+  try{
+    say('Loading the calendar…');
+    const ms=await api('meetings?year='+y),ss=await api('sessions?year='+y);
+    const rounds=ms.filter(m=>Date.parse(m.date_start)<=Date.now()&&!/test/i.test(m.meeting_name)).sort((a,b)=>Date.parse(a.date_start)-Date.parse(b.date_start));
+    const pick=(m,n)=>ss.find(s=>s.meeting_key===m.meeting_key&&s.session_name===n);
+    const keys=rounds.flatMap(m=>[pick(m,'Qualifying'),pick(m,'Race')]).filter(Boolean).map(s=>s.session_key);
+    if(!keys.length){say('OpenF1 has no results for this season yet.');return}
+    const rng=`session_key>=${Math.min(...keys)}&session_key<=${Math.max(...keys)}`;
+    say('Loading teams and qualifying results…');
+    const drs=await api('drivers?'+rng),res=await api('session_result?'+rng);
+    const d={k:y,rounds:[],teams:{}},tmOf={},old=sget(y)||{rounds:[]};
+    drs.forEach(x=>{if(!x.team_name)return;(tmOf[x.session_key]??={})[x.driver_number]=x.team_name;d.teams[x.team_name]=/^[0-9a-f]{6}$/i.test(x.team_colour||'')?'#'+x.team_colour:(d.teams[x.team_name]||'#888888')});
+    rounds.forEach(m=>{
+      const sq=pick(m,'Qualifying'),sr=pick(m,'Race');if(!sq&&!sr)return;
+      const R={name:m.circuit_short_name||m.location,q:{},r:{},rk:sr?sr.session_key:null,tm:tmOf[(sr||sq).session_key]||{}};
+      if(sq){
+        const tq=tmOf[sq.session_key]||{},best={};
+        res.filter(x=>x.session_key===sq.session_key).forEach(x=>{const v=Array.isArray(x.duration)?min(x.duration,q=>q):null,t=tq[x.driver_number];if(v!=null&&t&&(best[t]==null||v<best[t]))best[t]=v});
+        const b=min(Object.values(best),v=>v);
+        if(b!=null)Object.entries(best).forEach(([t,v])=>{R.q[t]=100*b/v});
+      }
+      const prev=old.rounds.find(o=>o.rk&&o.rk===R.rk&&o.rdone);
+      if(prev){R.r=prev.r;R.rdone=1}
+      d.rounds.push(R);
+    });
+    S.ssn=d;sput(d);say('');
+  }catch(e){say(e.message,1)}
+  render();
+}
+async function racePace(){
+  const d=S.ssn;if(!d||S.rp)return;
+  S.rp=true;render();
+  try{
+    for(const R of d.rounds){
+      if(!S.rp)break;
+      if(!R.rk||R.rdone)continue;
+      say(`Race pace: ${R.name}, ${d.rounds.filter(x=>x.rk&&!x.rdone).length} races left. Progress is saved, so you can stop and carry on later.`);
+      const ls=await api('laps?session_key='+R.rk,2),fast=min(ls,l=>l.lap_duration),by={};
+      ls.forEach(l=>{const t=R.tm[l.driver_number];if(t&&l.lap_number>1&&!l.is_pit_out_lap&&l.lap_duration!=null&&l.lap_duration<=fast*1.07)(by[t]??=[]).push(l.lap_duration)});
+      const m2={};
+      Object.entries(by).forEach(([t,a])=>{if(a.length>=10)m2[t]=medOf(a)});
+      const b=min(Object.values(m2),v=>v);
+      R.r={};if(b!=null)Object.entries(m2).forEach(([t,v])=>{R.r[t]=100*b/v});
+      R.rdone=1;sput(d);if(S.tab==='season')render();
+    }
+    say('');
+  }catch(e){say(e.message,1)}
+  S.rp=false;if(S.tab==='season')render();
+}
+const gp=v=>v==null?null:100*(100/v-1);
+const selTeams=d=>S.stt?[...S.stt].filter(t=>d&&d.teams[t]).sort():[];
+function teamPick(t){
+  if(t==='__all'){S.stt=null;if(S.sm==='b')S.sm='q'}
+  else{const c=new Set(S.stt||[]);if(!S.stt)S.sm='b';c.has(t)?c.delete(t):c.add(t);S.stt=c.size?c:null;if(!S.stt&&S.sm==='b')S.sm='q'}
+  render();
+}
+function tSeason(){
+  const y=$('year').value,d=S.ssn&&S.ssn.k===y?S.ssn:(S.ssn=sget(y));
+  const left=d?d.rounds.filter(x=>x.rk&&!x.rdone).length:0,cmp=selTeams(d).length>0,opt=(v,t,c)=>`<option value="${v}" ${v===c?'selected':''}>${t}</option>`;
+  const sm=cmp?(S.sm||'b'):(S.sm==='b'?'q':(S.sm||'q'));
+  const chips=d?`<div class="chips"><button class="chip ${cmp?'':'on'}" data-t="__all" style="--c:var(--line)">All teams</button>`+Object.keys(d.teams).sort().map(t=>{const on=!!(S.stt&&S.stt.has(t));return `<button class="chip ${on?'on':''}" data-t="${esc(t)}" style="--c:${d.teams[t]}" aria-pressed="${on}">${esc(t)}</button>`}).join('')+'</div>':'';
+  return `<div class="pick"><button class="btn" id="sload">${d?'Refresh calendar':'Load '+y+' season'}</button>${d&&(left||S.rp)?`<button class="btn" id="sace">${S.rp?'Stop':'Add race pace ('+left+' races left)'}</button>`:''}${d?`<label>Show<select id="sm">${opt('q','Qualifying',sm)}${opt('r','Race pace',sm)}${cmp?opt('b','Both',sm):''}</select></label>`:''}</div>
+  ${chips}
+  <p class="key">Every team is measured by how far it was behind the quickest car that weekend, so 0% means it was quickest and 0.20% means it was a fifth of a percent slower. Qualifying uses each team's best lap and loads in four requests. Race pace uses the median clean lap, which is only a rough guide because strategy and traffic differ. It needs one request per race, so it is added gradually to respect OpenF1's limit of about 30 requests a minute, and it is saved in this browser. Pick two or more teams above to compare them.</p>
+  ${d&&d.rounds.length?'<div class="card"><div class="ch" style="height:360px"><canvas id="sc"></canvas></div></div><div id="sx"></div>':'<p class="empty">Press the button to load the season picked at the top. Qualifying appears straight away.</p>'}`;
+}
+function pSeason(){
+  $('sload').onclick=loadSeason;
+  if($('sace'))$('sace').onclick=()=>{if(S.rp)S.rp=false;else racePace()};
+  const y=$('year').value,d=S.ssn&&S.ssn.k===y&&S.ssn.rounds.length?S.ssn:null;
+  if(!d)return;
+  const sel=selTeams(d),cmp=sel.length>0,m=cmp?(S.sm||'b'):(S.sm==='b'?'q':(S.sm||'q'));
+  const names=d.rounds.map(r=>r.name),hasR=d.rounds.some(r=>r.rdone),val=(r,k,t)=>gp(r[k][t]),kinds=m==='b'?['q','r']:[m],KN={q:'Qualifying',r:'Race pace'};
+  const line=(t,k,lab,dash)=>({label:lab,borderColor:d.teams[t],backgroundColor:d.teams[t],borderWidth:2,tension:.2,spanGaps:true,borderDash:dash?[6,4]:[],data:d.rounds.map(r=>val(r,k,t))});
+  const ds=cmp?sel.flatMap(t=>kinds.map(k=>line(t,k,`${t} ${k==='q'?'qualifying':'race pace'}`,k==='r'))):Object.keys(d.teams).map(t=>line(t,m,t));
+  mk('sc',{type:'line',data:{labels:names,datasets:ds},options:{scales:{y:{reverse:true,min:0,title:{display:true,text:'Percent behind the quickest car (higher on the chart is faster)'},ticks:{callback:v=>v.toFixed(1)+'%'}}},plugins:{tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y.toFixed(2)}% behind`}}}}});
+  const hint=!hasR&&kinds.includes('r')?'<p class="empty">Race pace has not been loaded yet. Press Add race pace above.</p>':'';
+  const avg=(t,k)=>{const a=d.rounds.map(r=>val(r,k,t)).filter(v=>v!=null);return a.length?a.reduce((x,z)=>x+z)/a.length:null};
+  if(cmp){
+    const best=(t,k)=>{const a=d.rounds.filter(r=>val(r,k,t)!=null).sort((x,z)=>val(x,k,t)-val(z,k,t));return a.length?`best at ${a[0].name} (${val(a[0],k,t).toFixed(2)}%), worst at ${a[a.length-1].name} (${val(a[a.length-1],k,t).toFixed(2)}%)`:'no data yet'};
+    const cols=sel.flatMap(t=>kinds.map(k=>[t,k])),pill=(v,lo)=>v==null?'–':`<span class="pill ${v<.0005?'p':v===lo?'g':''}">${v.toFixed(2)}%</span>`;
+    const rows=d.rounds.map(r=>{const lo={};kinds.forEach(k=>{lo[k]=sel.length>1?min(sel,t=>val(r,k,t)):null});return `<tr><td class="l">${esc(r.name)}</td>${cols.map(([t,k])=>`<td>${pill(val(r,k,t),lo[k])}</td>`).join('')}</tr>`});
+    rows.push(`<tr><td class="l"><b>Season average</b></td>${cols.map(([t,k])=>{const a=avg(t,k);return `<td><b>${a==null?'–':a.toFixed(2)+'%'}</b></td>`}).join('')}</tr>`);
+    $('sx').innerHTML=hint+sel.map(t=>`<p class="key"><span class="drv"><i style="background:${d.teams[t]}"></i>${esc(t)}</span> ${kinds.map(k=>`${KN[k]} ${esc(best(t,k))}.`).join(' ')}</p>`).join('')
+      +`<p class="key"><span class="p">Purple</span>quickest car that weekend<span class="g">Green</span>quickest of the teams you picked</p>`
+      +table(['Track',...cols.map(([t,k])=>`${esc(t)} ${k==='q'?'quali':'race'}`)],rows);
+  }else{
+    const hc=v=>v==null?'<td>–</td>':`<td style="background:hsl(${Math.round(Math.max(0,1-v/2)*130)} 55% 27%)">${v<.0005?'<b>0.00</b>':v.toFixed(2)}</td>`;
+    $('sx').innerHTML=(m==='r'?hint:'')+'<p class="key">Percent behind the quickest car each weekend. 0.00 means quickest.</p>'
+      +table(['Team',...names,'Average'],Object.keys(d.teams).sort((a,b)=>(avg(a,m)??99)-(avg(b,m)??99)).map(t=>`<tr><td class="l"><span class="drv"><i style="background:${d.teams[t]}"></i>${esc(t)}</span></td>${d.rounds.map(r=>hc(val(r,m,t))).join('')}<td><b>${avg(t,m)!=null?avg(t,m).toFixed(2):'–'}</b></td></tr>`));
+  }
+}
 const sec=t=>`<h2 class="sec">${t}</h2>`;
 function tPace(){
   const r=ranked();if(!r.length)return empty();
@@ -524,23 +764,30 @@ const TABS={
  pace:['Race Pace Insights',()=>tLaps()+sec('Pace summary')+tPace(),pLaps,'zap'],
  tele:['Telemetry Analyser',tTele,pTele,'pulse'],
  maps:['Sectors & Maps',()=>sec('Sector bests')+tSect()+sec('Track map')+tTrack(),pTrack,'map'],
- cars:['Car Performance',tSpeed,pSpeed,'car'],
+ cars:['Car Performance',()=>tSpeed()+sec('Tyre degradation')+tDeg(),seq(pSpeed,pDeg),'car'],
+ season:['Season Performance',tSeason,pSeason,'trend',true],
+ pos:['Race Positions',tPos,pPos,'list'],
+ rc:['Race Control & Radio',tRc,pRc,'chat'],
  strategy:['Strategy & Weather',()=>sec('Tyre stints')+tTyres()+sec('Pit stops')+tPits()+sec('Weather')+tWeather(),seq(pTyres,pPits,pWeather),'cloud']
 };
-function render(){hero();segBar();
+function render(){hero();segBar();cancelAnimationFrame(S.raf);S.raf=0;
   Object.values(S.charts).forEach(c=>c.destroy());S.charts={};
   document.querySelectorAll('#tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===S.tab));
   const t=TABS[S.tab];
-  $('view').innerHTML=S.stats.length?t[1]():empty();
-  if(S.stats.length&&t[2])t[2]();
+  const ok=S.stats.length||t[4];$('view').innerHTML=ok?t[1]():empty();
+  if(ok&&t[2])t[2]();
 }
 
 $('tabs').innerHTML=Object.entries(TABS).map(([k,v])=>`<button role="tab" data-tab="${k}"><svg viewBox="0 0 24 24" aria-hidden="true">${ICON[v[3]]}</svg><span>${v[0]}</span></button>`).join('');
 $('tabs').onclick=e=>{const b=e.target.closest('button');if(b){S.tab=b.dataset.tab;render()}};
-$('view').onclick=e=>{const b=e.target.closest('.chip');if(!b)return;const n=+b.dataset.n;S.picked.has(n)?S.picked.delete(n):S.picked.add(n);render()};
+$('view').onclick=e=>{const b=e.target.closest('.chip');if(!b)return;if(b.dataset.d!==undefined)return degPick(b.dataset.d);if(b.dataset.t!==undefined)return teamPick(b.dataset.t);const n=+b.dataset.n;S.picked.has(n)?S.picked.delete(n):S.picked.add(n);render()};
 $('view').onchange=e=>{const t=e.target;
   if(t.id==='metric'){S.metric=t.value;render()}
   else if(t.id==='clean'){S.clean=t.checked;render()}
+  else if(t.id==='fuel'){S.fuel=t.checked;render()}
+  else if(t.id==='sm'){S.sm=t.value;render()}
+  else if(t.id==='st'){S.st=t.value;render()}
+  else if(t.id==='rdv'){S.rdv=t.value;radio()}
   else if(t.id==='cb'){S.cb=t.value;render()}
   else if(t.id==='nm'){S.nm=+t.value;render()}
   else if(t.id==='ta'||t.id==='tb'){S.ta=$('ta').value;S.tb=$('tb')?$('tb').value:S.tb;render()}};
