@@ -706,14 +706,14 @@ function tSeason(){
   return `<div class="pick"><button class="btn" id="sload">${d?'Refresh calendar':'Load '+y+' season'}</button>${d&&(left||S.rp)?`<button class="btn" id="sace">${S.rp?'Stop':'Add race pace ('+left+' races left)'}</button>`:''}${d?`<label>Show<select id="sm">${opt('q','Qualifying',sm)}${opt('r','Race pace',sm)}${cmp?opt('b','Both',sm):''}</select></label>`:''}</div>
   ${chips}
   <p class="key">Every team is measured by how far it was behind the quickest car that weekend, so 0% means it was quickest and 0.20% means it was a fifth of a percent slower. Qualifying uses each team's best lap and loads in four requests. Race pace uses the median clean lap, which is only a rough guide because strategy and traffic differ. It needs one request per race, so it is added gradually to respect OpenF1's limit of about 30 requests a minute, and it is saved in this browser. Pick two or more teams above to compare them.</p>
-  ${d&&d.rounds.length?'<div class="card"><div class="ch" style="height:360px"><canvas id="sc"></canvas></div></div><div id="sx"></div>':'<p class="empty">Press the button to load the season picked at the top. Qualifying appears straight away.</p>'}`;
+  ${d&&d.rounds.length?'<div class="card"><div class="ch" style="height:360px"><canvas id="sc"></canvas></div></div><div id="sx"></div>'+devHtml():'<p class="empty">Press the button to load the season picked at the top. Qualifying appears straight away.</p>'}`;
 }
 function pSeason(){
   $('sload').onclick=loadSeason;
   if($('sace'))$('sace').onclick=()=>{if(S.rp)S.rp=false;else racePace()};
   const y=$('year').value,d=S.ssn&&S.ssn.k===y&&S.ssn.rounds.length?S.ssn:null;
   if(!d)return;
-  const sel=selTeams(d),cmp=sel.length>0,m=cmp?(S.sm||'b'):(S.sm==='b'?'q':(S.sm||'q'));
+  devel(d);const sel=selTeams(d),cmp=sel.length>0,m=cmp?(S.sm||'b'):(S.sm==='b'?'q':(S.sm||'q'));
   const names=d.rounds.map(r=>r.name),hasR=d.rounds.some(r=>r.rdone),val=(r,k,t)=>gp(r[k][t]),kinds=m==='b'?['q','r']:[m],KN={q:'Qualifying',r:'Race pace'};
   const line=(t,k,lab,dash)=>({label:lab,borderColor:d.teams[t],backgroundColor:d.teams[t],borderWidth:2,tension:.2,spanGaps:true,borderDash:dash?[6,4]:[],data:d.rounds.map(r=>val(r,k,t))});
   const ds=cmp?sel.flatMap(t=>kinds.map(k=>line(t,k,`${t} ${k==='q'?'qualifying':'race pace'}`,k==='r'))):Object.keys(d.teams).map(t=>line(t,m,t));
@@ -733,6 +733,24 @@ function pSeason(){
     $('sx').innerHTML=(m==='r'?hint:'')+'<p class="key">Percent behind the quickest car each weekend. 0.00 means quickest.</p>'
       +table(['Team',...names,'Average'],Object.keys(d.teams).sort((a,b)=>(avg(a,m)??99)-(avg(b,m)??99)).map(t=>`<tr><td class="l"><span class="drv"><i style="background:${d.teams[t]}"></i>${esc(t)}</span></td>${d.rounds.map(r=>hc(val(r,m,t))).join('')}<td><b>${avg(t,m)!=null?avg(t,m).toFixed(2):'–'}</b></td></tr>`));
   }
+}
+const devHtml=()=>{const dm=S.dm||'c',o=(v,t)=>`<option value="${v}" ${v===dm?'selected':''}>${t}</option>`;
+  return `<h2 class="sec">Development</h2><div class="pick"><label>Measured by<select id="dm">${o('c','Qualifying and race combined')}${o('q','Qualifying')}${o('r','Race pace')}</select></label></div><p class="key" id="dnote"></p><div class="card"><div class="ch" style="height:320px"><canvas id="dvc"></canvas></div></div><div class="card"><div class="ch" id="dvh"><canvas id="dvb"></canvas></div></div><div id="dvt"></div>`};
+function devel(d){
+  const sel=selTeams(d),teams=(sel.length?sel:Object.keys(d.teams)).sort(),dm=S.dm||'c';
+  const mean=a=>a.length?a.reduce((x,z)=>x+z)/a.length:null;
+  const g=(r,t)=>{const a=(dm==='c'?['q','r']:[dm]).map(k=>gp(r[k][t]));return a.some(v=>v==null)?null:mean(a)};
+  const ser=t=>d.rounds.map(r=>g(r,t)),roll=s=>s.map((_,i)=>mean(s.slice(Math.max(0,i-2),i+1).filter(v=>v!=null)));
+  const rows=teams.map(t=>{const v=ser(t).filter(x=>x!=null);if(v.length<4)return null;const e=mean(v.slice(0,3)),l=mean(v.slice(-3));return{t,e,l,c:e-l}}).filter(Boolean).sort((a,b)=>b.c-a.c);
+  if(!rows.length){$('dnote').textContent=dm==='q'||d.rounds.some(r=>r.rdone)?'Development needs at least four races with data for the chosen measure.':'Race pace has not been loaded yet. Press Add race pace above, or measure development by qualifying.';return}
+  mk('dvc',{type:'line',data:{labels:d.rounds.map(r=>r.name),datasets:teams.map(t=>({label:t,borderColor:d.teams[t],backgroundColor:d.teams[t],borderWidth:2,tension:.25,pointRadius:2,spanGaps:true,data:roll(ser(t))}))},
+    options:{scales:{y:{reverse:true,min:0,title:{display:true,text:'Percent behind the quickest car, 3-race average (higher is faster)'},ticks:{callback:v=>v.toFixed(1)+'%'}}},plugins:{tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y.toFixed(2)}% behind`}}}}});
+  $('dvh').style.height=(rows.length*32+70)+'px';
+  mk('dvb',{type:'bar',data:{labels:rows.map(r=>r.t),datasets:[{data:rows.map(r=>+r.c.toFixed(3)),backgroundColor:rows.map(r=>d.teams[r.t])}]},
+    options:{indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.parsed.x>=0?'Closed the gap by':'Fell back by'} ${Math.abs(c.parsed.x).toFixed(2)} points`}}},scales:{x:{title:{display:true,text:'Gap to the quickest car closed, in percentage points (negative means it fell back)'}}}}});
+  const b=rows[0],w=rows[rows.length-1];
+  $('dnote').textContent=`${b.t} developed best, closing the gap by ${b.c.toFixed(2)} points (from ${b.e.toFixed(2)}% behind in the first three races to ${b.l.toFixed(2)}% in the last three).`+(w.c<0?` ${w.t} lost the most ground, falling back by ${Math.abs(w.c).toFixed(2)} points.`:'')+' Gaps are measured against whoever was quickest each weekend, so a rival\'s progress also moves a team\'s number.';
+  $('dvt').innerHTML=table(['Team','First 3 races','Last 3 races','Gap closed (points)'],rows.map((r,i)=>`<tr><td class="l"><span class="drv"><i style="background:${d.teams[r.t]}"></i>${esc(r.t)}</span></td><td>${r.e.toFixed(2)}%</td><td>${r.l.toFixed(2)}%</td><td><span class="pill ${i===0&&r.c>0?'p':r.c>0?'g':''}">${r.c>=0?'+':''}${r.c.toFixed(2)}</span></td></tr>`));
 }
 const sec=t=>`<h2 class="sec">${t}</h2>`;
 function tPace(){
@@ -785,6 +803,7 @@ $('view').onchange=e=>{const t=e.target;
   if(t.id==='metric'){S.metric=t.value;render()}
   else if(t.id==='clean'){S.clean=t.checked;render()}
   else if(t.id==='fuel'){S.fuel=t.checked;render()}
+  else if(t.id==='dm'){S.dm=t.value;render()}
   else if(t.id==='sm'){S.sm=t.value;render()}
   else if(t.id==='st'){S.st=t.value;render()}
   else if(t.id==='rdv'){S.rdv=t.value;radio()}
